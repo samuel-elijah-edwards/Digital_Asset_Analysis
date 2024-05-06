@@ -1,0 +1,554 @@
+---
+title: "Digital Asset Analysis"
+format: html
+editor: visual
+embed-resources: true
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, dpi = 300, 
+                      cache = FALSE, fig.retina='retina',attr.output='style="overflow: visible;"')
+```
+
+# Healthline Digital Asset Analysis
+
+```{r}
+library(glmnet, quietly = TRUE)
+library(fastDummies, quietly = TRUE)
+library(caret, quietly = TRUE)
+library(pROC, quietly = TRUE)
+library(readxl, quietly = TRUE)
+library(randomForest, quietly = TRUE)
+
+set.seed(42)
+```
+
+```{r import data, echo=FALSE}
+df = read_excel("/Users/samueledwards/Desktop/ROV/Data_Analytics_Take_Home_HL__281_29 2.xlsx")
+```
+
+## Exploratory Data Analysis
+
+Here, we will be exploring the data set and checking for any information that can be useful for the task.
+
+```{r}
+summary(df)
+cat("\n", "~~~ COUNTING NULL VALUES ~~~", "\n")
+print(sapply(df, function(x)
+  sum(is.na(x))))
+cat("\n", "~~~ COLUMN NAMES ~~~", "\n")
+print(names(df))
+```
+
+### Observations
+
+-   We are mostly working with character/string data types. For the purposes of our goal, we will want to convert all variables to numerical data types
+
+    -   This will be done through the use of dummy variables, converting categorical variables into binary, numerical variables)
+
+-   The "known_diagnosis" column has many NULL values. To take care of this, we will replace all NULL values with "none'.
+
+-   Some of the names are formatted incorrectly. We will need to format them in a way that is easy for the machine to interpret them. I will be using "make.names" to do this.
+
+## Data Pre-processing
+
+```{r}
+### Removing unneccesary variables ###
+df$pageview_id = NULL
+df$`User ID` = NULL
+df$session_start_time = NULL
+df$asset_loaded_time = NULL
+
+### Filling NULL values ###
+df$known_diagnosis[is.na(df$known_diagnosis)] <- "None"
+
+### Fixing format of column names ###
+names(df) <- make.names(names = names(df), unique = TRUE)
+```
+
+```{r}
+### Creating Dummy Variables and formatting their names ###
+df <- dummy_cols(df)
+df_clean <-
+  df[,!names(df) %in% c("page_category",
+                        "Device_Type",
+                        "page_topic_description",
+                        "known_diagnosis")]
+names(df_clean) <-
+  make.names(names = names(df_clean), unique = TRUE)
+names(df_clean)
+```
+
+```{r}
+### Splitting up data set into training and test set (70/30)
+sample <-
+  sample(c(TRUE, FALSE),
+         nrow(df_clean),
+         replace = TRUE,
+         prob = c(0.7, 0.3))
+train  <- df_clean[sample,!names(df_clean) %in% c("Asset.Shown")]
+test   <- df_clean[!sample,!names(df_clean) %in% c("Asset.Shown")]
+```
+
+## Discovering Feature Importance using Logisitc Regression
+
+To find out what variables are important when increasing conversion rate, we will be using Logistic Regression with L1 Regularization (LASSO Regression) for each of the different Assets.
+
+LASSO Regression is used because it outputs a binary response (used for predicting conversion), and leverages the L1 penalty to essentially preform feature selection. The L1 penalty reduces overfitting and drives coefficients to 0 if it is beneficial to the model.
+
+```{r}
+set.seed(42)
+                              ############
+                              # Asset A  #
+                              ############
+
+### Getting training and test data containing only Asset A ###
+A_train <- train[train$Asset.Shown_A == 1, ]
+A_test <- test[test$Asset.Shown_A == 1, ]
+
+### Training the model ###
+A_fit = glmnet(
+  x = A_train[, !names(A_train) %in% c("Conversion",
+                                       "Asset.Shown_A",
+                                       "Asset.Shown_B",
+                                       "Asset.Shown_C")],
+  y = A_train$Conversion,
+  alpha = 1,
+  family = "binomial",
+  nlambda = 100
+)
+
+A_CV <-
+  cv.glmnet(
+    x = as.matrix(A_train[, !names(A_train) %in% c("Conversion",
+                                                   "Asset.Shown_A",
+                                                   "Asset.Shown_B",
+                                                   "Asset.Shown_C")]),
+    y = A_train$Conversion,
+    alpha = 1,
+    family = "binomial",
+    lambda = A_fit$lambda
+  )
+
+A_predicted <-
+  predict(
+    A_CV,
+    newx = as.matrix(A_test[, !names(A_test) %in% c("Conversion",
+                                                    "Asset.Shown_A",
+                                                    "Asset.Shown_B",
+                                                    "Asset.Shown_C")]),
+    s = A_CV$lambda.min,
+    type = "response",
+    exact = FALSE
+  )
+
+
+### Find the threshold that maximizes specificity and sensitivity ###
+A_roc_curve <- roc(A_test$Conversion, A_predicted)
+
+A_optimal_threshold <-
+  coords(A_roc_curve, x = "best", best.method = "closest.topleft")$threshold
+
+### Assigning binary values to predictions ###
+A_response_predictions <-
+  factor(ifelse(A_predicted >= A_optimal_threshold, 1, 0))
+
+A_confmat <-
+  confusionMatrix(A_response_predictions,
+                  as.factor(A_test$Conversion),
+                  positive = "1")
+
+A_coefs <- coef(A_CV, s = A_CV$lambda.min)
+
+
+print(A_confmat)
+print(A_coefs)
+```
+
+```{r}
+set.seed(42)
+                             ############
+                             # Asset B  #
+                             ############
+
+### Getting training and test data containing only Asset B ###
+B_train <- train[train$Asset.Shown_B == 1, ]
+B_test <- test[test$Asset.Shown_B == 1, ]
+
+### Training the model ###
+B_fit = glmnet(
+  x = B_train[, !names(B_train) %in% c("Conversion",
+                                       "Asset.Shown_A",
+                                       "Asset.Shown_B",
+                                       "Asset.Shown_C")],
+  y = B_train$Conversion,
+  alpha = 1,
+  family = "binomial",
+  nlambda = 100
+)
+
+B_CV <-
+  cv.glmnet(
+    x = as.matrix(B_train[, !names(B_train) %in% c("Conversion",
+                                                   "Asset.Shown_A",
+                                                   "Asset.Shown_B",
+                                                   "Asset.Shown_C")]),
+    y = B_train$Conversion,
+    alpha = 1,
+    family = "binomial",
+    lambda = B_fit$lambda
+  )
+
+
+B_predicted <-
+  predict(
+    B_CV,
+    newx = as.matrix(B_test[, !names(B_test) %in% c("Conversion",
+                                                    "Asset.Shown_A",
+                                                    "Asset.Shown_B",
+                                                    "Asset.Shown_C")]),
+    s = B_CV$lambda.min,
+    type = "response",
+    exact = FALSE
+  )
+
+### Find the threshold that maximizes specificity and sensitivity ###
+B_roc_curve <- roc(B_test$Conversion, B_predicted)
+
+B_optimal_threshold <-
+  coords(B_roc_curve, x = "best", best.method = "closest.topleft")$threshold
+
+### Assigning binary values to predictions ###
+B_response_predictions <-
+  factor(ifelse(B_predicted >= B_optimal_threshold, 1, 0))
+
+B_confmat <-
+  confusionMatrix(B_response_predictions,
+                  as.factor(B_test$Conversion),
+                  positive = "1")
+
+B_coefs <- coef(B_CV, s = B_CV$lambda.min)
+
+print(B_confmat)
+print(B_coefs)
+```
+
+```{r}
+set.seed(42)
+                             ############
+                             # Asset C  #
+                             ############
+
+### Getting training and test data containing only Asset C ###
+C_train <- train[train$Asset.Shown_C == 1, ]
+C_test <- test[test$Asset.Shown_C == 1, ]
+
+### Training the model ###
+C_fit = glmnet(
+  x = C_train[, !names(C_train) %in% c("Conversion",
+                                       "Asset.Shown_A",
+                                       "Asset.Shown_B",
+                                       "Asset.Shown_C")],
+  y = C_train$Conversion,
+  alpha = 1,
+  family = "binomial",
+  nlambda = 100
+)
+
+C_CV <-
+  cv.glmnet(
+    x = as.matrix(C_train[, !names(C_train) %in% c("Conversion",
+                                                   "Asset.Shown_A",
+                                                   "Asset.Shown_B",
+                                                   "Asset.Shown_C")]),
+    y = C_train$Conversion,
+    alpha = 1,
+    family = "binomial",
+    lambda = C_fit$lambda
+  )
+
+C_predicted <-
+  predict(
+    C_CV,
+    newx = as.matrix(C_test[, !names(C_test) %in% c("Conversion",
+                                                    "Asset.Shown_A",
+                                                    "Asset.Shown_B",
+                                                    "Asset.Shown_C")]),
+    s = C_CV$lambda.min,
+    type = "response",
+    exact = FALSE
+  )
+
+
+### Find the threshold that maximizes specificity and sensitivity ###
+C_roc_curve <- roc(C_test$Conversion, C_predicted)
+
+C_optimal_threshold <-
+  coords(C_roc_curve, x = "best", best.method = "closest.topleft")$threshold
+
+### Assigning binary values to predictions ###
+C_response_predictions <-
+  factor(ifelse(C_predicted >= C_optimal_threshold, 1, 0))
+
+C_confmat <-
+  confusionMatrix(C_response_predictions,
+                  as.factor(C_test$Conversion),
+                  positive = "1")
+
+C_coefs <- coef(C_CV, s = C_CV$lambda.min)
+
+print(C_confmat)
+print(C_coefs)
+```
+
+## Incremental Revenue Opportunity (IRO)
+
+Here, we calculate the IRO using our findings from the feature importance findings.
+
+*Useful Acronyms:*
+
+*HCR_X - Historical Conversion Rate for Asset X*
+
+*R_X - Revenue for Asset X*
+
+*PP_X - Predicted Positives (Conversions) for Asset X*
+
+*NCR_X - New Conversion Rate using feature importance finding for Asset X*
+
+*CRI_X - Conversion Rate Improvement for Asset X*
+
+*IRO_X - Incremental Revenue Opportunity for Asset X*
+
+```{r}
+
+HCR_A <-
+  nrow(df[df$Conversion == 1 &
+            df$Asset.Shown == "A", ]) / nrow(df[df$Asset.Shown == "A",])
+
+R_A <- nrow(df[df$Asset.Shown == "A",]) * HCR_A * 5
+
+A_precision = A_confmat$byClass[["Precision"]]
+
+PP_A =  (A_confmat$table[2, 1] + A_confmat$table[2, 2])
+
+NCR_A <-
+  (HCR_A * nrow(df[df$Asset.Shown == "A",]) + PP_A) / 
+  nrow(df[df$Asset.Shown == "A",])
+
+CRI_A <- NCR_A - HCR_A
+
+IRO_A <- CRI_A * nrow(df[df$Asset.Shown == "A",]) * 5
+
+Potential_Rev_A <- R_A + IRO_A
+
+cat("Historical CR:", HCR_A, "\n",
+    "Revenue:", R_A, "\n",
+    "New CR:", NCR_A, "\n",
+    "CR Improvement:", CRI_A, "\n",
+    "IRO:", IRO_A, "\n",
+    "Potential Revenue:", Potential_Rev_A, "\n")
+```
+```{r}
+A_confmat$table[2, 2] /  nrow(df[df$Asset.Shown == "A",])
+```
+
+
+
+```{r}
+HCR_B <-
+  nrow(df[df$Conversion == 1 &
+            df$Asset.Shown == "B", ]) / nrow(df[df$Asset.Shown == "B",])
+
+
+R_B <- nrow(df[df$Asset.Shown == "B",]) * HCR_B * 7
+
+
+B_precision = B_confmat$byClass[["Precision"]]
+
+PP_B =  (B_confmat$table[2, 1] + B_confmat$table[2, 2]) * B_precision
+
+NCR_B <-
+  (HCR_B * nrow(df[df$Asset.Shown == "B",]) + PP_B) / 
+  nrow(df[df$Asset.Shown == "B",])
+
+
+CRI_B <- NCR_B - HCR_B
+
+
+IRO_B <- CRI_B * nrow(df[df$Asset.Shown == "B",]) * 7
+
+
+Potential_Rev_B <- R_B + IRO_B
+
+
+cat("Historical CR:", HCR_B, "\n",
+    "Revenue:", R_B, "\n",
+    "New CR:", NCR_B, "\n",
+    "CR Improvement:", CRI_B, "\n",
+    "IRO:", IRO_B, "\n",
+    "Potential Revenue:", Potential_Rev_B, "\n")
+```
+
+```{r}
+HCR_C <-
+  nrow(df[df$Conversion == 1 &
+            df$Asset.Shown == "C", ]) / nrow(df[df$Asset.Shown == "C",])
+
+
+R_C <- nrow(df[df$Asset.Shown == "C",]) * HCR_C * 2.5
+
+
+C_precision = C_confmat$byClass[["Precision"]]
+
+PP_C =  (C_confmat$table[2, 1] + C_confmat$table[2, 2]) * C_precision
+
+NCR_C <-
+  (HCR_C * nrow(df[df$Asset.Shown == "C",]) + PP_C) / 
+  nrow(df[df$Asset.Shown == "C",])
+
+
+CRI_C <- NCR_C - HCR_C
+
+
+IRO_C <- CRI_C * nrow(df[df$Asset.Shown == "C",]) * 2.5
+
+
+Potential_Rev_C <- R_C + IRO_C
+
+
+cat("Historical CR:", HCR_C, "\n",
+    "Revenue:", R_C, "\n",
+    "New CR:", NCR_C, "\n",
+    "CR Improvement:", CRI_C, "\n",
+    "IRO:", IRO_C, "\n",
+    "Potential Revenue:", Potential_Rev_C, "\n")
+```
+
+## Results
+
+Here are our results all in one place!
+
++---------------------------------+------------------------------+-------------------------------+------------------------------+
+|                                 | Asset A                      | Asset B                       | Asset C                      |
++=================================+==============================+===============================+==============================+
+| Incremental Revenue Opportunity | ```                          | ```                           | ```                          |
+|                                 | Historical CR: 0.1096545     | Historical CR: 0.07127273 %   | Historical CR: 0.1705714 %   |
+|                                 |  Revenue: $ 30155            |  Revenue: $ 13720             |  Revenue: $ 7462.5           |
+|                                 |  New CR: 0.2176364 %         |  New CR: 0.1458545 %          |  New CR: 0.2914286 %         |
+|                                 |  CR Improvement: 0.1079818 % |  CR Improvement: 0.07458182 % |  CR Improvement: 0.1208571 % |
+|                                 |  IRO: $ 29695                |  IRO: $ 14357                 |  IRO: $ 5287.5               |
+|                                 |  Potential Revenue: $ 59850  |  Potential Revenue: $ 28077   |  Potential Revenue: $ 12750  |
+|                                 | ```                          | ```                           | ```                          |
++---------------------------------+------------------------------+-------------------------------+------------------------------+
+
+### Important Features:
+
+[**Asset A**]{.underline}
+
++----------------------------+---------------------------------------------+------------------------------------------------------+
+| **Type of Visitor**        | **Page Category**                           | **Page Topic**                                       |
++============================+=============================================+======================================================+
+| Return.Visitor             | page_category_crohnsdisease                 | page_topic_description_bloating                      |
++----------------------------+---------------------------------------------+------------------------------------------------------+
+| Device_Type_desktop        | page_category_otherdigestiveproblems        | page_topic_description_brand_name_prescription_drugs |
++----------------------------+---------------------------------------------+------------------------------------------------------+
+| known_diagnosis_Depression | page_category_otherinflammatoryboweldisease | page_topic_description_diabetes_nutrition            |
++----------------------------+---------------------------------------------+------------------------------------------------------+
+|                            | page_category_ulcerativecolitis             | page_topic_description_food_poisoning                |
++----------------------------+---------------------------------------------+------------------------------------------------------+
+|                            |                                             | page_topic_description_gastrointestinal_procedures   |
++----------------------------+---------------------------------------------+------------------------------------------------------+
+|                            |                                             | page_topic_description_joint_pain                    |
++----------------------------+---------------------------------------------+------------------------------------------------------+
+|                            |                                             | page_topic_description_online_mental_healthcare      |
++----------------------------+---------------------------------------------+------------------------------------------------------+
+|                            |                                             | page_topic_description_preventative_care_exams       |
++----------------------------+---------------------------------------------+------------------------------------------------------+
+
+[**Asset B**]{.underline}
+
++------------------------------------+---------------------------------------------+------------------------------------------------------+
+| **Type of Visitor**                | **Page Category**                           | **Page Topic**                                       |
++====================================+=============================================+======================================================+
+| Return.Visitor                     | page_category_crohnsdisease                 | page_topic_description_abdominal_pain                |
++------------------------------------+---------------------------------------------+------------------------------------------------------+
+| known_diagnosis_Depression         | page_category_otherdigestiveproblems        | page_topic_description_brand_name_prescription_drugs |
++------------------------------------+---------------------------------------------+------------------------------------------------------+
+| known_diagnosis_Ulcerative.Colitis | page_category_otherinflammatoryboweldisease | page_topic_description_exercise_benefits_for_disease |
++------------------------------------+---------------------------------------------+------------------------------------------------------+
+| Device_Type_mobile                 | page_category_ulcerativecolitis             | page_topic_description_gastrointestinal_procedures   |
++------------------------------------+---------------------------------------------+------------------------------------------------------+
+|                                    |                                             | page_topic_description_joint_pain                    |
++------------------------------------+---------------------------------------------+------------------------------------------------------+
+|                                    |                                             | page_topic_description_online_mental_healthcare      |
++------------------------------------+---------------------------------------------+------------------------------------------------------+
+|                                    |                                             | page_topic_description_preventative_care_exams       |
++------------------------------------+---------------------------------------------+------------------------------------------------------+
+
+[**Asset C**]{.underline}
+
++--------------------------+---------------------------------------------+------------------------------------------------------+
+| **Type of Visitor**      | **Page Category**                           | **Page Topic**                                       |
++==========================+=============================================+======================================================+
+| Return.Visitor           | page_category_crohnsdisease                 | page_topic_description_abdominal_pain                |
++--------------------------+---------------------------------------------+------------------------------------------------------+
+| known_diagnosis_Migraine | page_category_otherdigestiveproblems        | page_topic_description_bleeding_and_blood_loss       |
++--------------------------+---------------------------------------------+------------------------------------------------------+
+| known_diagnosis_None     | page_category_otherinflammatoryboweldisease | page_topic_description_brand_name_prescription_drugs |
++--------------------------+---------------------------------------------+------------------------------------------------------+
+|                          | page_category_ulcerativecolitis             | page_topic_description_gastrointestinal_procedures   |
++--------------------------+---------------------------------------------+------------------------------------------------------+
+|                          |                                             | page_topic_description_joint_pain                    |
++--------------------------+---------------------------------------------+------------------------------------------------------+
+|                          |                                             | page_topic_description_online_mental_healthcare      |
++--------------------------+---------------------------------------------+------------------------------------------------------+
+|                          |                                             | page_topic_description_probiotics_and_prebiotics     |
++--------------------------+---------------------------------------------+------------------------------------------------------+
+|                          |                                             | page_topic_description_thyroid                       |
++--------------------------+---------------------------------------------+------------------------------------------------------+
+
+## Random Forest for Feature Importance
+
+Random Forest is another method to find important features for conversions. I try that below, but quickly discover that this is not a suitable method for this data without dealing with data imbalance. You can see this with the Out-Of-Bag Error Score of \~45%, essentially saying that this model predicts the conversion 45% of the time.
+
+```{r}
+set.seed(42)
+
+rf_train_data <-
+  df_clean[sample, !names(df_clean) %in% c("Asset.Shown_A", "Asset.Shown_B", "Asset.Shown_C")]
+rf_test_data <-
+  df_clean[!sample, !names(df_clean) %in% c("Asset.Shown_A", "Asset.Shown_B", "Asset.Shown_C")]
+
+
+train_control <-
+  trainControl(
+    method = "cv",
+    number = 10,
+    classProbs = TRUE,
+    summaryFunction = twoClassSummary
+  )
+
+
+m_search <-
+  tuneRF(
+    x = rf_train_data[, -which(names(rf_train_data) == "Asset.Shown")],
+    y = as.factor(rf_train_data$Asset.Shown),
+    ntreeTry = 100,
+    stepFactor = 1.5,
+    improve = 0.01
+  )
+
+best.m <- m_search[, 1][[which.min(m_search[, "OOBError"])[[1]]]]
+
+
+rf_model <-
+  randomForest(
+    as.factor(Asset.Shown) ~ .,
+    data = rf_train_data,
+    ntree = 100,
+    mtry = best.m,
+    trControl = train_control
+  )
+
+rf_model
+```
